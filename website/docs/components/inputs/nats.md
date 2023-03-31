@@ -45,6 +45,7 @@ input:
     urls: []
     subject: ""
     queue: ""
+    nak_delay: ""
     prefetch_count: 32
     tls:
       enabled: false
@@ -140,6 +141,13 @@ subject: foo.>
 ### `queue`
 
 An optional queue group to consume as.
+
+
+Type: `string`  
+
+### `nak_delay`
+
+An optional delay on redelivering a message when negatively acknowledged.
 
 
 Type: `string`  
