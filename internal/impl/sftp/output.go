@@ -2,6 +2,7 @@ package sftp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -114,10 +115,7 @@ func (s *sftpWriter) Connect(ctx context.Context) error {
 }
 
 func (s *sftpWriter) WriteBatch(ctx context.Context, msg message.Batch) error {
-	s.handleMut.Lock()
-	client := s.client
-	s.handleMut.Unlock()
-	if client == nil {
+	if s.client == nil {
 		return component.ErrNotConnected
 	}
 
@@ -148,12 +146,17 @@ func (s *sftpWriter) WriteBatch(ctx context.Context, msg message.Batch) error {
 			flag |= os.O_TRUNC
 		}
 
-		if err := s.client.MkdirAll(filepath.Dir(path)); err != nil {
+		if err := s.retryOnce(ctx, func() error {
+			return s.client.MkdirAll(filepath.Dir(path))
+		}, sftp.ErrSshFxConnectionLost); err != nil {
 			return err
 		}
 
-		file, err := s.client.OpenFile(path, flag)
-		if err != nil {
+		var file *sftp.File
+		if err := s.retryOnce(ctx, func() error {
+			file, err = s.client.OpenFile(path, flag)
+			return err
+		}, sftp.ErrSshFxConnectionLost); err != nil {
 			return err
 		}
 
@@ -175,6 +178,23 @@ func (s *sftpWriter) WriteBatch(ctx context.Context, msg message.Batch) error {
 		}
 		return nil
 	})
+}
+
+func (s *sftpWriter) retryOnce(ctx context.Context, fn func() error, errToRetry error) error {
+	err := fn()
+	if err != nil && errors.Is(err, errToRetry) {
+		s.log.Debugln("Reconnecting and retrying...")
+		s.client = nil
+		s.handleMut.Unlock()
+		defer s.handleMut.Lock()
+		err = s.Connect(ctx)
+		s.handleMut.Lock()
+		if err != nil {
+			return err
+		}
+		err = fn()
+	}
+	return err
 }
 
 func (s *sftpWriter) Close(ctx context.Context) (err error) {
